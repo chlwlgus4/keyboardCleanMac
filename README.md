@@ -35,3 +35,14 @@ rm -rf /Applications/KeyboardClean.app
 cp -R /Users/choijihyeon/IdeaProjects/keyboardCleanMac/build/KeyboardClean.app /Applications/KeyboardClean.app
 open /Applications/KeyboardClean.app
 ```
+
+## App Store Connect 아카이브/내보내기
+Xcode에 Apple Developer 계정이 로그인되어 있어야 합니다.
+
+```bash
+TEAM_ID=YOUR_TEAM_ID BUNDLE_ID=com.yourcompany.keyboardclean ./scripts/archive_app_store.sh
+```
+
+결과물:
+- 아카이브: `/Users/choijihyeon/IdeaProjects/keyboardCleanMac/build/KeyboardClean.xcarchive`
+- 내보내기: `/Users/choijihyeon/IdeaProjects/keyboardCleanMac/build/AppStoreExport`

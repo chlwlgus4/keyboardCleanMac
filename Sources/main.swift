@@ -2,10 +2,160 @@ import AppKit
 import ApplicationServices
 import Carbon
 
+private enum ScreenshotLanguage: String {
+    case english = "en"
+    case korean = "ko"
+
+    static var current: ScreenshotLanguage? {
+        let environment = ProcessInfo.processInfo.environment
+
+        if let rawValue = environment["SCREENSHOT_UI_LANGUAGE"]?.lowercased() {
+            if rawValue.hasPrefix("ko") {
+                return .korean
+            }
+
+            if rawValue.hasPrefix("en") {
+                return .english
+            }
+        }
+
+        return nil
+    }
+}
+
+private enum AppCopy {
+    private static var screenshotLanguage: ScreenshotLanguage? {
+        ScreenshotLanguage.current
+    }
+
+    private static func localized(english: String, korean: String) -> String {
+        switch screenshotLanguage {
+        case .korean:
+            return korean
+        case .english, nil:
+            return english
+        }
+    }
+
+    static var shortcutWindowTitle: String {
+        localized(english: "Set Shortcut", korean: "단축키 설정")
+    }
+
+    static var shortcutHint: String {
+        localized(english: "Press the shortcut you want", korean: "원하는 단축키를 누르세요")
+    }
+
+    static func currentShortcut(_ shortcut: Shortcut) -> String {
+        localized(english: "Current: \(shortcut.displayString)", korean: "현재: \(shortcut.displayString)")
+    }
+
+    static var cancel: String {
+        localized(english: "Cancel", korean: "취소")
+    }
+
+    static var controlWindowTitle: String {
+        localized(english: "KeyboardClean Control", korean: "KeyboardClean 제어")
+    }
+
+    static func cleaningModeStatus(enabled: Bool) -> String {
+        localized(
+            english: enabled ? "Cleaning Mode: ON" : "Cleaning Mode: OFF",
+            korean: enabled ? "클리닝 모드: 켜짐" : "클리닝 모드: 꺼짐"
+        )
+    }
+
+    static func cleaningModeToggle(enabled: Bool) -> String {
+        localized(
+            english: enabled ? "Disable Cleaning Mode" : "Enable Cleaning Mode",
+            korean: enabled ? "클리닝 모드 끄기" : "클리닝 모드 켜기"
+        )
+    }
+
+    static var setShortcut: String {
+        localized(english: "Set Shortcut...", korean: "단축키 설정...")
+    }
+
+    static var quit: String {
+        localized(english: "Quit", korean: "종료")
+    }
+
+    static func hudCleaningMode(enabled: Bool) -> String {
+        localized(
+            english: enabled ? "Cleaning Mode ON" : "Cleaning Mode OFF",
+            korean: enabled ? "클리닝 모드 켜짐" : "클리닝 모드 꺼짐"
+        )
+    }
+
+    static var overlayTitle: String {
+        localized(english: "Cleaning Mode ON", korean: "클리닝 모드 켜짐")
+    }
+
+    static func overlayShortcut(_ shortcut: Shortcut) -> String {
+        localized(
+            english: "Exit Shortcut: \(shortcut.displayString)",
+            korean: "종료 단축키: \(shortcut.displayString)"
+        )
+    }
+
+    static var overlayClose: String {
+        localized(english: "Close", korean: "종료")
+    }
+}
+
 private enum ShortcutStore {
     static let keyCode = "shortcut.keyCode"
     static let modifiers = "shortcut.modifiers"
     static let didShowFirstLaunchWindow = "ui.didShowFirstLaunchWindow"
+}
+
+fileprivate enum ScreenshotScene: String {
+    case control
+    case shortcut
+    case cleaning
+}
+
+fileprivate enum LaunchMode {
+    case standard
+    case screenshot(ScreenshotScene)
+    case exportScreenshot(ScreenshotScene, String)
+
+    static func current() -> LaunchMode {
+        let arguments = CommandLine.arguments
+
+        func value(for option: String) -> String? {
+            if let argument = arguments.first(where: { $0.hasPrefix("\(option)=") }) {
+                return String(argument.split(separator: "=", maxSplits: 1).last ?? "")
+            }
+
+            if let index = arguments.firstIndex(of: option),
+               arguments.indices.contains(index + 1) {
+                return arguments[index + 1]
+            }
+
+            return nil
+        }
+
+        if let sceneRawValue = value(for: "--export-screenshot-scene"),
+           let outputDirectory = value(for: "--output-dir"),
+           let scene = ScreenshotScene(rawValue: sceneRawValue) {
+            return .exportScreenshot(scene, outputDirectory)
+        }
+
+        if let sceneArgument = arguments.first(where: { $0.hasPrefix("--screenshot-scene=") }) {
+            let rawValue = String(sceneArgument.split(separator: "=", maxSplits: 1).last ?? "")
+            if let scene = ScreenshotScene(rawValue: rawValue) {
+                return .screenshot(scene)
+            }
+        }
+
+        if let index = arguments.firstIndex(of: "--screenshot-scene"),
+           arguments.indices.contains(index + 1),
+           let scene = ScreenshotScene(rawValue: arguments[index + 1]) {
+            return .screenshot(scene)
+        }
+
+        return .standard
+    }
 }
 
 struct Shortcut {
@@ -312,13 +462,13 @@ final class ShortcutCaptureView: NSView {
 }
 
 final class ShortcutWindowController: NSWindowController {
-    private let hintLabel = NSTextField(labelWithString: "원하는 단축키를 누르세요")
+    private let hintLabel = NSTextField(labelWithString: AppCopy.shortcutHint)
     private let currentLabel: NSTextField
     private let captureView = ShortcutCaptureView(frame: .zero)
     private let onCapture: (Shortcut) -> Void
 
     init(currentShortcut: Shortcut, onCapture: @escaping (Shortcut) -> Void) {
-        self.currentLabel = NSTextField(labelWithString: "현재: \(currentShortcut.displayString)")
+        self.currentLabel = NSTextField(labelWithString: AppCopy.currentShortcut(currentShortcut))
         self.onCapture = onCapture
 
         let window = NSWindow(
@@ -327,7 +477,7 @@ final class ShortcutWindowController: NSWindowController {
             backing: .buffered,
             defer: false
         )
-        window.title = "Set Shortcut"
+        window.title = AppCopy.shortcutWindowTitle
         window.center()
 
         super.init(window: window)
@@ -360,13 +510,13 @@ final class ShortcutWindowController: NSWindowController {
         infoStack.spacing = 12
         infoStack.translatesAutoresizingMaskIntoConstraints = false
 
-        let cancelButton = NSButton(title: "Cancel", target: self, action: #selector(cancelPressed))
+        let cancelButton = NSButton(title: AppCopy.cancel, target: self, action: #selector(cancelPressed))
         cancelButton.bezelStyle = .rounded
         cancelButton.translatesAutoresizingMaskIntoConstraints = false
 
+        contentView.addSubview(captureView)
         contentView.addSubview(infoStack)
         contentView.addSubview(cancelButton)
-        contentView.addSubview(captureView)
 
         NSLayoutConstraint.activate([
             infoStack.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 24),
@@ -388,10 +538,10 @@ final class ShortcutWindowController: NSWindowController {
 }
 
 final class FallbackControlWindowController: NSWindowController {
-    private let statusLabel = NSTextField(labelWithString: "Cleaning Mode: OFF")
-    private let toggleButton = NSButton(title: "Enable Cleaning Mode", target: nil, action: nil)
-    private let shortcutButton = NSButton(title: "Set Shortcut...", target: nil, action: nil)
-    private let quitButton = NSButton(title: "Quit", target: nil, action: nil)
+    private let statusLabel = NSTextField(labelWithString: AppCopy.cleaningModeStatus(enabled: false))
+    private let toggleButton = NSButton(title: AppCopy.cleaningModeToggle(enabled: false), target: nil, action: nil)
+    private let shortcutButton = NSButton(title: AppCopy.setShortcut, target: nil, action: nil)
+    private let quitButton = NSButton(title: AppCopy.quit, target: nil, action: nil)
 
     init(onToggle: Selector, onSetShortcut: Selector, onQuit: Selector, target: AnyObject) {
         let window = NSWindow(
@@ -400,7 +550,7 @@ final class FallbackControlWindowController: NSWindowController {
             backing: .buffered,
             defer: false
         )
-        window.title = "KeyboardClean Control"
+        window.title = AppCopy.controlWindowTitle
         window.center()
 
         super.init(window: window)
@@ -435,8 +585,8 @@ final class FallbackControlWindowController: NSWindowController {
     required init?(coder: NSCoder) { nil }
 
     func setCleaningMode(_ enabled: Bool) {
-        statusLabel.stringValue = enabled ? "Cleaning Mode: ON" : "Cleaning Mode: OFF"
-        toggleButton.title = enabled ? "Disable Cleaning Mode" : "Enable Cleaning Mode"
+        statusLabel.stringValue = AppCopy.cleaningModeStatus(enabled: enabled)
+        toggleButton.title = AppCopy.cleaningModeToggle(enabled: enabled)
     }
 }
 
@@ -474,7 +624,7 @@ final class ModeHUDController {
 
     func show(isEnabled: Bool) {
         hideWorkItem?.cancel()
-        label.stringValue = isEnabled ? "Cleaning Mode ON" : "Cleaning Mode OFF"
+        label.stringValue = AppCopy.hudCleaningMode(enabled: isEnabled)
 
         if let screen = NSScreen.main {
             let frame = screen.visibleFrame
@@ -496,9 +646,103 @@ final class ModeHUDController {
     }
 }
 
+final class CleaningOverlayController {
+    private let panel: NSPanel
+    private let titleLabel = NSTextField(labelWithString: AppCopy.overlayTitle)
+    private let shortcutLabel = NSTextField(labelWithString: "")
+    private let closeButton = NSButton(title: AppCopy.overlayClose, target: nil, action: nil)
+    private let onClose: () -> Void
+
+    init(onClose: @escaping () -> Void) {
+        self.onClose = onClose
+
+        panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 280, height: 128),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.isFloatingPanel = true
+        panel.level = .statusBar
+        panel.hasShadow = true
+        panel.backgroundColor = NSColor(calibratedWhite: 0.12, alpha: 0.95)
+        panel.isOpaque = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.hidesOnDeactivate = false
+
+        setupUI()
+    }
+
+    private func setupUI() {
+        guard let contentView = panel.contentView else { return }
+
+        titleLabel.font = .systemFont(ofSize: 16, weight: .bold)
+        titleLabel.textColor = .white
+        titleLabel.alignment = .center
+
+        shortcutLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        shortcutLabel.textColor = .white
+        shortcutLabel.alignment = .center
+
+        closeButton.bezelStyle = .rounded
+        closeButton.target = self
+        closeButton.action = #selector(closePressed)
+
+        let stack = NSStackView(views: [titleLabel, shortcutLabel, closeButton])
+        stack.orientation = .vertical
+        stack.alignment = .centerX
+        stack.spacing = 10
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        contentView.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
+            stack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
+            stack.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 16),
+            stack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -16)
+        ])
+    }
+
+    func show(shortcut: Shortcut) {
+        updateShortcut(shortcut)
+        positionPanelAtTopRight()
+        panel.orderFrontRegardless()
+    }
+
+    func hide() {
+        panel.orderOut(nil)
+    }
+
+    func updateShortcut(_ shortcut: Shortcut) {
+        shortcutLabel.stringValue = AppCopy.overlayShortcut(shortcut)
+    }
+
+    var window: NSWindow { panel }
+
+    private func positionPanelAtTopRight() {
+        let screen = NSScreen.main ?? NSScreen.screens.first
+        guard let visibleFrame = screen?.visibleFrame else { return }
+
+        let panelSize = panel.frame.size
+        let origin = NSPoint(
+            x: visibleFrame.maxX - panelSize.width - 20,
+            y: visibleFrame.maxY - panelSize.height - 20
+        )
+        panel.setFrameOrigin(origin)
+    }
+
+    @objc private func closePressed() {
+        onClose()
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private let launchMode: LaunchMode
     private let blocker = KeyboardBlocker()
     private let hudController = ModeHUDController()
+    private lazy var cleaningOverlayController = CleaningOverlayController(onClose: { [weak self] in
+        self?.disableCleaningModeFromOverlay()
+    })
     private var statusItem: NSStatusItem!
     private var toggleItem: NSMenuItem!
     private var shortcutInfoItem: NSMenuItem!
@@ -509,10 +753,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var currentShortcut = Shortcut.default
     private var cachedAppIcon: NSImage?
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
+    fileprivate init(launchMode: LaunchMode) {
+        self.launchMode = launchMode
+        super.init()
+    }
 
+    func applicationDidFinishLaunching(_ notification: Notification) {
         currentShortcut = Shortcut.load()
+
+        switch launchMode {
+        case let .screenshot(scene):
+            NSApp.setActivationPolicy(.regular)
+            showScreenshotScene(scene)
+            return
+        case let .exportScreenshot(scene, outputDirectory):
+            NSApp.setActivationPolicy(.regular)
+            showScreenshotScene(scene)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                self?.exportScreenshotScene(scene, outputDirectory: outputDirectory)
+            }
+            return
+        case .standard:
+            break
+        }
+
+        NSApp.setActivationPolicy(.accessory)
         installOrRepairStatusItem()
 
         let defaults = UserDefaults.standard
@@ -531,6 +796,102 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         })
 
         applyShortcut(currentShortcut, save: false)
+    }
+
+    private func showScreenshotScene(_ scene: ScreenshotScene) {
+        switch scene {
+        case .control:
+            showControlWindow()
+            fallbackWindowController?.setCleaningMode(false)
+            positionWindow(fallbackWindowController?.window, xFraction: 0.68, yFraction: 0.52)
+        case .shortcut:
+            let controller = ShortcutWindowController(currentShortcut: currentShortcut) { _ in }
+            shortcutWindowController = controller
+            controller.showWindow(nil)
+            controller.window?.makeKeyAndOrderFront(nil)
+            positionWindow(controller.window, xFraction: 0.68, yFraction: 0.54)
+        case .cleaning:
+            showControlWindow()
+            fallbackWindowController?.setCleaningMode(true)
+            positionWindow(fallbackWindowController?.window, xFraction: 0.30, yFraction: 0.48)
+            cleaningOverlayController.show(shortcut: currentShortcut)
+        }
+
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func exportScreenshotScene(_ scene: ScreenshotScene, outputDirectory: String) {
+        let directoryURL = URL(fileURLWithPath: outputDirectory, isDirectory: true)
+
+        do {
+            try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+
+            switch scene {
+            case .control:
+                try export(window: fallbackWindowController?.window, named: "control", to: directoryURL)
+            case .shortcut:
+                try export(window: shortcutWindowController?.window, named: "shortcut", to: directoryURL)
+            case .cleaning:
+                try export(window: fallbackWindowController?.window, named: "cleaning-primary", to: directoryURL)
+                try export(window: cleaningOverlayController.window, named: "cleaning-overlay", to: directoryURL)
+            }
+        } catch {
+            fputs("Failed to export screenshot scene: \(error)\n", stderr)
+        }
+
+        NSApp.terminate(nil)
+    }
+
+    private func export(window: NSWindow?, named fileName: String, to directoryURL: URL) throws {
+        guard let window else {
+            throw NSError(domain: "KeyboardClean", code: 1, userInfo: [NSLocalizedDescriptionKey: "Missing window for screenshot export."])
+        }
+
+        window.displayIfNeeded()
+
+        guard let renderView = window.contentView?.superview ?? window.contentView else {
+            throw NSError(domain: "KeyboardClean", code: 2, userInfo: [NSLocalizedDescriptionKey: "Unable to access window content for export."])
+        }
+
+        let bounds = renderView.bounds
+        let scale = Int(window.backingScaleFactor)
+        guard let representation = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: max(Int(bounds.width) * max(scale, 1), 1),
+            pixelsHigh: max(Int(bounds.height) * max(scale, 1), 1),
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ) else {
+            throw NSError(domain: "KeyboardClean", code: 3, userInfo: [NSLocalizedDescriptionKey: "Unable to create bitmap representation."])
+        }
+
+        representation.size = bounds.size
+        renderView.cacheDisplay(in: bounds, to: representation)
+
+        guard let data = representation.representation(using: .png, properties: [:]) else {
+            throw NSError(domain: "KeyboardClean", code: 4, userInfo: [NSLocalizedDescriptionKey: "Unable to encode PNG data."])
+        }
+
+        try data.write(to: directoryURL.appendingPathComponent("\(fileName).png"))
+    }
+
+    private func positionWindow(_ window: NSWindow?, xFraction: CGFloat, yFraction: CGFloat) {
+        guard let window,
+              let visibleFrame = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame else {
+            return
+        }
+
+        let size = window.frame.size
+        let origin = NSPoint(
+            x: visibleFrame.minX + (visibleFrame.width * xFraction) - (size.width / 2),
+            y: visibleFrame.minY + (visibleFrame.height * yFraction) - (size.height / 2)
+        )
+        window.setFrameOrigin(origin)
     }
 
     private func installOrRepairStatusItem() {
@@ -606,6 +967,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             currentShortcut = shortcut
             blocker.setToggleShortcut(shortcut)
             shortcutInfoItem.title = "Shortcut: \(shortcut.displayString)"
+            cleaningOverlayController.updateShortcut(shortcut)
             if save {
                 shortcut.save()
             }
@@ -626,13 +988,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         toggleCleaningMode(showPermissionAlert: true)
     }
 
+    @objc private func disableCleaningModeFromOverlay() {
+        guard blocker.cleaningModeEnabled else { return }
+        blocker.cleaningModeEnabled = false
+        toggleItem.title = "Enable Cleaning Mode"
+        applyStatusBarIcon(isLocked: false)
+        fallbackWindowController?.setCleaningMode(false)
+        cleaningOverlayController.hide()
+        hudController.show(isEnabled: false)
+    }
+
     private func toggleCleaningMode(showPermissionAlert: Bool) {
         if blocker.cleaningModeEnabled {
-            blocker.cleaningModeEnabled = false
-            toggleItem.title = "Enable Cleaning Mode"
-            applyStatusBarIcon(isLocked: false)
-            fallbackWindowController?.setCleaningMode(false)
-            hudController.show(isEnabled: false)
+            disableCleaningModeFromOverlay()
             return
         }
 
@@ -652,11 +1020,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         toggleItem.title = "Disable Cleaning Mode"
         applyStatusBarIcon(isLocked: true)
         fallbackWindowController?.setCleaningMode(true)
+        cleaningOverlayController.show(shortcut: currentShortcut)
         hudController.show(isEnabled: true)
     }
 
     @objc private func quitApp() {
         statusItemHealthTimer?.invalidate()
+        cleaningOverlayController.hide()
         blocker.stop()
         NSApp.terminate(nil)
     }
@@ -748,6 +1118,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 let app = NSApplication.shared
-let delegate = AppDelegate()
+let delegate = AppDelegate(launchMode: LaunchMode.current())
 app.delegate = delegate
 app.run()
